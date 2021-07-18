@@ -47,12 +47,12 @@ void drawNLightsBinaryWithColor(int numPixels, int color)
     int lightNum = 0;
     while (numPixels > 0)
     {
-        // Test the sign bit, if lit, light the pixel.
+        // Test the LSB, if lit, light the pixel.
         if (numPixels & 1)
         {
             CircuitPlayground.setPixelColor(lightNum, color);
         }
-        // Throw away the current sign bit.
+        // Throw away the LSB.
         numPixels >>= 1;
         lightNum++;
     }
