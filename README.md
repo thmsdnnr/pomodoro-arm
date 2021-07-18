@@ -1,5 +1,7 @@
 # pomodoro circuit express
 
+![pomo-express](https://user-images.githubusercontent.com/18345212/126052534-fe3ad2d3-2676-417c-accc-ee3a83131831.png)
+
 Pomdoro Circuit Express is a pomodoro timer running on the [Circuit Express](https://learn.adafruit.com/adafruit-circuit-playground-express) by Adafruit.
 
 It's pretty simple and uses interrupts to respond to user events in the event loop. Runs with microsecond precision -- each loop takes roughly 100us or so. This is not so important for the timer precision, due to the large length of the intervals, but it does keep the device feeling snappy to user interactions.
