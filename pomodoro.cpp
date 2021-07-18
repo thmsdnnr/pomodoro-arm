@@ -2,23 +2,19 @@
  * pomodoro.cpp is a pomodoro timer designed for an
  * Adafruit Circuit Playground Express:
  * https://learn.adafruit.com/adafruit-circuit-playground-express
+ * https://github.com/adafruit/Adafruit_CircuitPlayground
 * */
 
-// https://github.com/adafruit/Adafruit_CircuitPlayground
 #include <Adafruit_CircuitPlayground.h>
 
-// ATTRIBUTION: Tap code from:
-// https://github.com/adafruit/Adafruit_CircuitPlayground/blob/master/examples/accelTap/accelTap.ino
-
-// Adjust this number for the sensitivity of the 'click' force
-// this strongly depend on the range! for 16G, try 5-10
-// for 8G, try 10-20. for 4G try 20-40. for 2G try 40-80
-#define CLICKTHRESHHOLD 40
-
+// Frequencies and sound durations for end-of-cycle tones.
 #define PITCH_C3 130
 #define PITCH_E3 164
 #define PITCH_G3 196
 #define SOUND_DURATION_MS 50
+
+// How hard to tap for detection. Lower number = less force.
+#define TAP_THRESHOLD_FORCE 15
 
 // Number of lights available to illuminate on the board.
 // Circuit Playground Express has 10.
@@ -66,6 +62,27 @@ void drawNLightsWithColor(int numPixels, int color)
         CircuitPlayground.setPixelColor(i, color);
 }
 
+// Interrupt service routines to react to user HW interactions
+volatile bool isPaused = false;
+volatile bool didTogglePause = false;
+void togglePaused(void)
+{
+    isPaused = !isPaused;
+    didTogglePause = true;
+}
+
+volatile bool playTones = true;
+void togglePlayTones(void)
+{
+    playTones = !playTones;
+}
+
+volatile bool isOn = true;
+void toggleIsOn(void)
+{
+    isOn = !isOn;
+}
+
 // 3 states: work, short break, long break.
 const int colors[3] = {WORK_COLOR, SBRK_COLOR, LBRK_COLOR};
 const int sounds[3] = {PITCH_C3, PITCH_E3, PITCH_G3};
@@ -90,158 +107,120 @@ int totalPomoCt = 0;
 // Time is tracked in ticks of microsecond precision.
 unsigned long lastMicros = micros();
 
-volatile bool isPaused = false;
-volatile bool didTogglePause = false;
-void togglePaused(void)
-{
-    isPaused = !isPaused;
-    didTogglePause = true;
-}
-
-volatile bool displayStats = false;
-void toggleDisplayMode(void)
-{
-    displayStats = !displayStats;
-    // Kind of a hack to prevent tap from button press triggering.
-    isPaused = false;
-}
-
-volatile bool playTones = true;
-void togglePlayTones(void)
-{
-    playTones = !playTones;
-    // Kind of a hack to prevent tap from button press triggering.
-    isPaused = false;
-}
-
-volatile bool isOn = true;
-void toggleIsOn(void)
-{
-    isOn = !isOn;
-    // Kind of a hack to prevent tap from button press triggering.
-    isPaused = false;
-}
-
+// Main app loop.
 void loop()
 {
-    if (isOn)
-    {
-        if (displayStats)
-        {
-            drawNLightsBinaryWithColor(totalPomoCt, WORK_COLOR);
-            delay(2000);
-            displayStats = false;
-        }
-
-        if (isPaused)
-        {
-            // Start at the beginning
-            while (isPaused)
-            {
-                // Turn off all the NeoPixels
-                CircuitPlayground.clearPixels();
-                delay(242);
-                for (int pixelIdx = 0; pixelIdx < numPixels; pixelIdx++)
-                {
-                    CircuitPlayground.setPixelColor(pixelIdx, color);
-                    delay(42);
-                }
-                // Wait a little bit so we don't spin too fast
-                delay(1042);
-            }
-        }
-        else
-        {
-            unsigned long thisMicros = micros();
-            unsigned long timePassed = thisMicros - lastMicros;
-            lastMicros = thisMicros;
-
-            if (didTogglePause)
-            {
-                drawNLightsWithColor(numPixels, color);
-                didTogglePause = false;
-                // we were paused, so ignore the time passed while paused :D
-                timePassed = 0;
-            }
-
-            // No state transition.
-            if (duration >= 0)
-            {
-                // Display fractional number of lights depending on state.
-                // We have to scale the duration by 2**4 here in order to prevent overflow
-                // Only want to get the fraction complete so far for the given state period
-                // to illuminate that integral percentage of lights.
-                numPixels = min(CT_NEOPIXELS, 1 + (CT_NEOPIXELS * (duration >> 4) / (durations[state] >> 4)));
-                if (numPixels != lastNumPixels)
-                {
-                    drawNLightsWithColor(numPixels, color);
-                    lastNumPixels = numPixels;
-                }
-                duration -= timePassed;
-            }
-
-            // State transition.
-            if (duration < 0)
-            {
-                if (state == 0)
-                {
-                    // In work state.
-                    thisCyclePomoCt++;
-                    totalPomoCt++;
-                    if (thisCyclePomoCt == NUM_WORK_BEFORE_LONG_BREAK)
-                    {
-                        // Go to long break.
-                        thisCyclePomoCt = 0;
-                        state = 2;
-                    }
-                    else
-                    {
-                        // Go to short break.
-                        state = 1;
-                    }
-                }
-                else
-                {
-                    // We were in a break state -- go to work.
-                    state = 0;
-                }
-
-                // Update color, sound, duration for current state.
-                color = colors[state];
-                sound = sounds[state];
-                duration = durations[state];
-
-                // Play an end-of-state tone.
-                if (playTones)
-                    CircuitPlayground.playTone(sound, SOUND_DURATION_MS);
-                drawNLightsWithColor(10, color);
-
-                // We pause at each state transition to wait for user interaction.
-                isPaused = true;
-            }
-        }
-    }
-    else
+    if (!isOn)
     {
         // If off, turn off pixels :)
         CircuitPlayground.clearPixels();
     }
+    else
+    {
+        while (isPaused)
+        {
+            // Draw number of completed pomodors in binary,
+            // then stream through all neopixels with current
+            // state color until user taps to resume.
+            CircuitPlayground.clearPixels();
+            drawNLightsBinaryWithColor(totalPomoCt, WORK_COLOR);
+            delay(424);
+            for (int pixelIdx = 0; pixelIdx < numPixels; pixelIdx++)
+            {
+                CircuitPlayground.setPixelColor(pixelIdx, color);
+                delay(42);
+            }
+            delay(242);
+        }
+
+        // Compute time elapsed since last tick, and if unpaused,
+        // subtract from total time remaining for current state.
+        unsigned long thisMicros = micros();
+        unsigned long timePassed = thisMicros - lastMicros;
+        lastMicros = thisMicros;
+
+        // Each loop computes a timePassed, but we want to ignore
+        // it if the device is paused.
+        if (didTogglePause)
+        {
+            drawNLightsWithColor(numPixels, color);
+            didTogglePause = false;
+            // Ignore the time passed while paused.
+            timePassed = 0;
+        }
+
+        // No state transition.
+        if (duration >= 0)
+        {
+            // Display num lights * (percent completed) for current state.
+            // Scale the duration by 2**4 in order to prevent overflow.
+            numPixels = min(CT_NEOPIXELS, 1 + (CT_NEOPIXELS * (duration >> 4) / (durations[state] >> 4)));
+            if (numPixels != lastNumPixels)
+            {
+                drawNLightsWithColor(numPixels, color);
+                lastNumPixels = numPixels;
+            }
+            duration -= timePassed;
+        }
+
+        // State transition.
+        if (duration < 0)
+        {
+            if (state == 0)
+            {
+                // In work state.
+                thisCyclePomoCt++;
+                totalPomoCt++;
+                if (thisCyclePomoCt == NUM_WORK_BEFORE_LONG_BREAK)
+                {
+                    // Work -> Long Break
+                    thisCyclePomoCt = 0;
+                    state = 2;
+                }
+                else
+                {
+                    // Work -> Short Break
+                    state = 1;
+                }
+            }
+            else
+            {
+                // {Long Break || Short Break} -> Work
+                state = 0;
+            }
+
+            // Update color, sound, duration for current state.
+            color = colors[state];
+            sound = sounds[state];
+            duration = durations[state];
+
+            // Play an end-of-state tone.
+            if (playTones)
+                CircuitPlayground.playTone(sound, SOUND_DURATION_MS);
+            drawNLightsWithColor(10, color);
+
+            // We pause at each state transition to wait for user interaction.
+            isPaused = true;
+            numPixels = CT_NEOPIXELS;
+        }
+    }
 }
 
+// Initialize the hardware and attach interrupt handlers.
 void setup(void)
 {
     CircuitPlayground.begin();
-    // Attach interrupts to sense taps
-    // 0 = turn off click detection & interrupt
-    // 1 = single click only interrupt output
-    // 2 = double click only interrupt output, detect single click
-    // Adjust threshhold, higher numbers are less sensitive
-    CircuitPlayground.setAccelRange(LIS3DH_RANGE_2_G); // 2, 4, 8 or 16 G!
-    CircuitPlayground.setAccelTap(1, CLICKTHRESHHOLD);
-    attachInterrupt(digitalPinToInterrupt(CPLAY_LIS3DH_INTERRUPT), togglePaused, FALLING);
 
-    // Left button pressed, shows stats.
-    attachInterrupt(digitalPinToInterrupt(4), toggleDisplayMode, FALLING);
+    // I want the switch to be on if it's flipped right :)
+    // but slideSwitch returns True if it's flipped left.
+    isOn = !CircuitPlayground.slideSwitch();
+
+    // A tap toggles pause. ATTRIBUTION: Tap code from:
+    // https://github.com/adafruit/Adafruit_CircuitPlayground/blob/master/examples/accelTap/accelTap.ino
+
+    CircuitPlayground.setAccelRange(LIS3DH_RANGE_2_G);
+    CircuitPlayground.setAccelTap(1, TAP_THRESHOLD_FORCE);
+    attachInterrupt(digitalPinToInterrupt(CPLAY_LIS3DH_INTERRUPT), togglePaused, FALLING);
 
     // Right button pressed, toggles playing end-of-cycle tones.
     attachInterrupt(digitalPinToInterrupt(5), togglePlayTones, FALLING);
